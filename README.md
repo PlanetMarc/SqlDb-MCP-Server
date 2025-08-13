@@ -116,16 +116,26 @@ docker-compose up
 
 ## Deployment
 
-### Local Installation (Claude Desktop)
+### Local Installation (Visual Studio Code)
 
-To use with Claude Desktop, add the server configuration:
+To use with Visual Studio Code and MCP-enabled extensions:
 
-**On Windows:** `%APPDATA%/Claude/claude_desktop_config.json`
-**On MacOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+1. **Install Roo Cline Extension** (or another MCP-compatible extension):
+   - Open VS Code
+   - Go to Extensions (Ctrl+Shift+X)
+   - Search for "Roo Cline" or your preferred MCP client extension
+   - Click Install
+
+2. **Configure MCP Server in VS Code settings**:
+
+   Open VS Code settings (`settings.json`):
+   - Press `Ctrl+Shift+P` (or `Cmd+Shift+P` on Mac)
+   - Type "Preferences: Open Settings (JSON)"
+   - Add the MCP server configuration:
 
 ```json
 {
-  "mcpServers": {
+  "roo-cline.mcpServers": {
     "sql-server": {
       "command": "node",
       "args": ["C:/path/to/sql-server-mcp/build/index.js"],
@@ -141,6 +151,31 @@ To use with Claude Desktop, add the server configuration:
   }
 }
 ```
+
+3. **Alternative: Use workspace-specific configuration**:
+   
+   Create `.vscode/settings.json` in your workspace root:
+
+```json
+{
+  "roo-cline.mcpServers": {
+    "sql-server": {
+      "command": "node",
+      "args": ["${workspaceFolder}/sql-server-mcp/build/index.js"],
+      "env": {
+        "DB_USER": "${env:DB_USER}",
+        "DB_PASSWORD": "${env:DB_PASSWORD}",
+        "DB_SERVER": "${env:DB_SERVER}",
+        "DB_NAME": "${env:DB_NAME}",
+        "DB_ENCRYPT": "true",
+        "DB_TRUST_CERT": "false"
+      }
+    }
+  }
+}
+```
+
+**Note**: The exact configuration key (e.g., `roo-cline.mcpServers`) may vary depending on your MCP client extension. Consult your extension's documentation for the correct configuration format.
 
 ### Azure Deployment
 
