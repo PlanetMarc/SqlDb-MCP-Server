@@ -1,0 +1,101 @@
+name: Deploy to Azure Container Instances
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  RESOURCE_GROUP: cof-mcp-rg
+  LOCATION: eastus
+  CONTAINER_NAME: cof-mcp-server
+  REGISTRY_NAME: cofmcpregistry
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '20'
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Build TypeScript
+      run: npm run build
+
+    - name: Login to Azure
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+    - name: Create Resource Group
+      run: |
+        az group create \
+          --name ${{ env.RESOURCE_GROUP }} \
+          --location ${{ env.LOCATION }}
+
+    - name: Create Container Registry
+      run: |
+        az acr create \
+          --resource-group ${{ env.RESOURCE_GROUP }} \
+          --name ${{ env.REGISTRY_NAME }} \
+          --sku Basic \
+          --admin-enabled true
+
+    - name: Get ACR credentials
+      id: acr
+      run: |
+        echo "::set-output name=registry::$(az acr show --name ${{ env.REGISTRY_NAME }} --query loginServer -o tsv)"
+        echo "::set-output name=username::$(az acr credential show --name ${{ env.REGISTRY_NAME }} --query username -o tsv)"
+        echo "::set-output name=password::$(az acr credential show --name ${{ env.REGISTRY_NAME }} --query passwords[0].value -o tsv)"
+
+    - name: Login to ACR
+      uses: docker/login-action@v2
+      with:
+        registry: ${{ steps.acr.outputs.registry }}
+        username: ${{ steps.acr.outputs.username }}
+        password: ${{ steps.acr.outputs.password }}
+
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v4
+      with:
+        context: .
+        push: true
+        tags: ${{ steps.acr.outputs.registry }}/${{ env.CONTAINER_NAME }}:latest
+
+    - name: Deploy to Azure Container Instances
+      run: |
+        az container create \
+          --resource-group ${{ env.RESOURCE_GROUP }} \
+          --name ${{ env.CONTAINER_NAME }} \
+          --image ${{ steps.acr.outputs.registry }}/${{ env.CONTAINER_NAME }}:latest \
+          --registry-login-server ${{ steps.acr.outputs.registry }} \
+          --registry-username ${{ steps.acr.outputs.username }} \
+          --registry-password ${{ steps.acr.outputs.password }} \
+          --cpu 1 \
+          --memory 1 \
+          --restart-policy OnFailure \
+          --environment-variables \
+            DB_USER=${{ secrets.DB_USER }} \
+            DB_SERVER=${{ secrets.DB_SERVER }} \
+            DB_NAME=${{ secrets.DB_NAME }} \
+            DB_ENCRYPT=${{ secrets.DB_ENCRYPT }} \
+            DB_TRUST_CERT=${{ secrets.DB_TRUST_CERT }} \
+          --secure-environment-variables \
+            DB_PASSWORD=${{ secrets.DB_PASSWORD }}
+
+    - name: Show deployment status
+      run: |
+        az container show \
+          --resource-group ${{ env.RESOURCE_GROUP }} \
+          --name ${{ env.CONTAINER_NAME }} \
+          --query "{Status:instanceView.state, IP:ipAddress.ip}" \
+          -o table

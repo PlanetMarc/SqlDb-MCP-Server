@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  mcp-server:
+    build: .
+    environment:
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_SERVER=${DB_SERVER}
+      - DB_NAME=${DB_NAME}
+      - DB_ENCRYPT=${DB_ENCRYPT}
+      - DB_TRUST_CERT=${DB_TRUST_CERT}
+    stdin_open: true
+    tty: true
+    networks:
+      - mcp-network
+
+networks:
+  mcp-network:
+    driver: bridge
