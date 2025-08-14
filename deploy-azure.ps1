@@ -15,7 +15,10 @@ param(
     [string]$RegistryName = "cofmcpregistry",
     
     [Parameter(Mandatory=$false)]
-    [string]$KeyVaultName = "cof-mcp-keyvault"
+    [string]$KeyVaultName = "cof-mcp-keyvault",
+    
+    [Parameter(Mandatory=$false)]
+    [switch]$SkipKeyVault = $false
 )
 
 Write-Host "Starting Azure deployment for MCP SQL Server..." -ForegroundColor Green
@@ -48,21 +51,64 @@ docker login $acrLoginServer -u $acrCredentials.username -p $acrCredentials.pass
 Write-Host "Pushing image to ACR..." -ForegroundColor Yellow
 docker push "${acrLoginServer}/${ContainerName}:latest"
 
-# 5. Create Azure Key Vault for secrets
-Write-Host "Creating/Verifying Azure Key Vault..." -ForegroundColor Yellow
-az keyvault create --name $KeyVaultName `
-    --resource-group $ResourceGroupName `
-    --location $Location
+# 5. Handle Key Vault (optional)
+if (-not $SkipKeyVault) {
+    try {
+        Write-Host "Creating/Verifying Azure Key Vault..." -ForegroundColor Yellow
+        az keyvault create --name $KeyVaultName `
+            --resource-group $ResourceGroupName `
+            --location $Location `
+            --enable-rbac-authorization false 2>$null
 
-# 6. Store database credentials in Key Vault
-Write-Host "Storing secrets in Key Vault..." -ForegroundColor Yellow
-Write-Host "Please enter database password:" -ForegroundColor Cyan
-$dbPassword = Read-Host -AsSecureString
-$dbPasswordPlain = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($dbPassword))
+        # 5a. Get current user's object ID and set Key Vault access policy
+        Write-Host "Setting Key Vault access policies..." -ForegroundColor Yellow
+        $currentUserObjectId = az ad signed-in-user show --query id -o tsv 2>$null
 
-az keyvault secret set --vault-name $KeyVaultName `
-    --name "db-password" `
-    --value $dbPasswordPlain
+        if ($currentUserObjectId) {
+            az keyvault set-policy --name $KeyVaultName `
+                --object-id $currentUserObjectId `
+                --secret-permissions get list set delete backup restore recover purge 2>$null
+        } else {
+            Write-Host "Warning: Could not get current user ID. Trying with UPN..." -ForegroundColor Yellow
+            $currentUserUpn = az ad signed-in-user show --query userPrincipalName -o tsv 2>$null
+            if ($currentUserUpn) {
+                az keyvault set-policy --name $KeyVaultName `
+                    --upn $currentUserUpn `
+                    --secret-permissions get list set delete backup restore recover purge 2>$null
+            }
+        }
+
+        # Wait for policy propagation
+        Write-Host "Waiting for access policy propagation..." -ForegroundColor Yellow
+        Start-Sleep -Seconds 10
+
+        # 6. Store database credentials in Key Vault
+        Write-Host "Storing secrets in Key Vault..." -ForegroundColor Yellow
+        Write-Host "Please enter database password:" -ForegroundColor Cyan
+        $dbPassword = Read-Host -AsSecureString
+        $dbPasswordPlain = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($dbPassword))
+
+        $secretResult = az keyvault secret set --vault-name $KeyVaultName `
+            --name "db-password" `
+            --value $dbPasswordPlain 2>&1
+        
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "Warning: Could not store secret in Key Vault. Continuing without Key Vault." -ForegroundColor Yellow
+            Write-Host "Error details: $secretResult" -ForegroundColor Red
+        } else {
+            Write-Host "Secret stored successfully in Key Vault." -ForegroundColor Green
+        }
+    }
+    catch {
+        Write-Host "Warning: Key Vault operations failed. Continuing without Key Vault." -ForegroundColor Yellow
+        Write-Host "Error: $_" -ForegroundColor Red
+    }
+} else {
+    Write-Host "Skipping Key Vault creation (using -SkipKeyVault flag)" -ForegroundColor Yellow
+    Write-Host "Please enter database password:" -ForegroundColor Cyan
+    $dbPassword = Read-Host -AsSecureString
+    $dbPasswordPlain = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($dbPassword))
+}
 
 # 7. Create Azure Container Instance
 Write-Host "Creating Azure Container Instance..." -ForegroundColor Yellow
