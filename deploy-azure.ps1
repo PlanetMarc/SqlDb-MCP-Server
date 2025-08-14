@@ -90,6 +90,7 @@ az container create `
     --registry-password $acrCredentials.password `
     --cpu 1 `
     --memory 1 `
+    --os-type Linux `
     --restart-policy OnFailure `
     --environment-variables `
         DB_USER=$DB_USER `
