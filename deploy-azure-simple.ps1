@@ -18,6 +18,58 @@ param(
 Write-Host "Starting simplified Azure deployment for MCP SQL Server..." -ForegroundColor Green
 Write-Host "This script will deploy without Azure Key Vault for simplicity." -ForegroundColor Cyan
 
+# 0. Check and select Azure subscription
+Write-Host "`nChecking Azure subscriptions..." -ForegroundColor Yellow
+
+# Get all subscriptions
+$subscriptions = az account list --query "[].{Name:name, Id:id, IsDefault:isDefault}" -o json | ConvertFrom-Json
+
+if ($subscriptions.Count -eq 0) {
+    Write-Host "Error: No Azure subscriptions found. Please run 'az login' first." -ForegroundColor Red
+    exit 1
+}
+
+# Display current subscription
+$currentSub = $subscriptions | Where-Object { $_.IsDefault -eq $true }
+Write-Host "`nCurrent subscription: " -NoNewline -ForegroundColor Cyan
+Write-Host "$($currentSub.Name) ($($currentSub.Id))" -ForegroundColor White
+
+# Ask if user wants to change subscription
+if ($subscriptions.Count -gt 1) {
+    Write-Host "`nAvailable subscriptions:" -ForegroundColor Yellow
+    for ($i = 0; $i -lt $subscriptions.Count; $i++) {
+        $sub = $subscriptions[$i]
+        $prefix = if ($sub.IsDefault) { "*" } else { " " }
+        Write-Host "$prefix [$i] $($sub.Name)" -ForegroundColor White
+    }
+    
+    Write-Host "`nDo you want to use the current subscription? (Y/n): " -NoNewline -ForegroundColor Yellow
+    $useCurrentSub = Read-Host
+    
+    if ($useCurrentSub -eq 'n' -or $useCurrentSub -eq 'N') {
+        Write-Host "Select subscription number: " -NoNewline -ForegroundColor Yellow
+        $subIndex = Read-Host
+        
+        if ($subIndex -match '^\d+$' -and [int]$subIndex -ge 0 -and [int]$subIndex -lt $subscriptions.Count) {
+            $selectedSub = $subscriptions[[int]$subIndex]
+            Write-Host "Switching to subscription: $($selectedSub.Name)" -ForegroundColor Cyan
+            az account set --subscription $selectedSub.Id
+            
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "Error: Failed to switch subscription." -ForegroundColor Red
+                exit 1
+            }
+            Write-Host "Subscription switched successfully." -ForegroundColor Green
+        } else {
+            Write-Host "Invalid selection. Using current subscription." -ForegroundColor Yellow
+        }
+    }
+} else {
+    Write-Host "Only one subscription available. Proceeding with: $($currentSub.Name)" -ForegroundColor Green
+}
+
+Write-Host "`n----------------------------------------" -ForegroundColor DarkGray
+
 # 1. Create Resource Group if it doesn't exist
 Write-Host "`nCreating/Verifying Resource Group..." -ForegroundColor Yellow
 az group create --name $ResourceGroupName --location $Location
