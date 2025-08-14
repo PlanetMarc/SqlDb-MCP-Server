@@ -106,33 +106,74 @@ docker push "${acrLoginServer}/${ContainerName}:latest"
 # 5. Handle Key Vault (optional)
 if (-not $SkipKeyVault) {
     try {
-        Write-Host "Creating/Verifying Azure Key Vault..." -ForegroundColor Yellow
-        az keyvault create --name $KeyVaultName `
+        Write-Host "Creating/Verifying Azure Key Vault with RBAC..." -ForegroundColor Yellow
+        
+        # Create Key Vault with RBAC authorization enabled
+        $kvCreateResult = az keyvault create --name $KeyVaultName `
             --resource-group $ResourceGroupName `
             --location $Location `
-            --enable-rbac-authorization false 2>$null
+            --enable-rbac-authorization true 2>&1
+        
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "Note: Key Vault may already exist. Continuing..." -ForegroundColor Yellow
+        }
 
-        # 5a. Get current user's object ID and set Key Vault access policy
-        Write-Host "Setting Key Vault access policies..." -ForegroundColor Yellow
+        # 5a. Get current user's object ID for RBAC role assignment
+        Write-Host "Getting user information for RBAC assignment..." -ForegroundColor Yellow
         $currentUserObjectId = az ad signed-in-user show --query id -o tsv 2>$null
-
-        if ($currentUserObjectId) {
-            az keyvault set-policy --name $KeyVaultName `
-                --object-id $currentUserObjectId `
-                --secret-permissions get list set delete backup restore recover purge 2>$null
+        
+        if (-not $currentUserObjectId) {
+            Write-Host "Error: Could not get current user ID for RBAC assignment." -ForegroundColor Red
+            Write-Host "Attempting to continue without Key Vault..." -ForegroundColor Yellow
+            $SkipKeyVault = $true
         } else {
-            Write-Host "Warning: Could not get current user ID. Trying with UPN..." -ForegroundColor Yellow
-            $currentUserUpn = az ad signed-in-user show --query userPrincipalName -o tsv 2>$null
-            if ($currentUserUpn) {
-                az keyvault set-policy --name $KeyVaultName `
-                    --upn $currentUserUpn `
-                    --secret-permissions get list set delete backup restore recover purge 2>$null
+            # Get the Key Vault resource ID
+            $keyVaultId = az keyvault show --name $KeyVaultName --resource-group $ResourceGroupName --query id -o tsv
+            
+            if ($keyVaultId) {
+                # Assign "Key Vault Secrets Officer" role to current user
+                Write-Host "Assigning 'Key Vault Secrets Officer' role to current user..." -ForegroundColor Yellow
+                
+                # The role definition ID for "Key Vault Secrets Officer" is b86a8fe4-44ce-4948-aee5-eccb2c155cd7
+                $roleAssignmentResult = az role assignment create `
+                    --role "Key Vault Secrets Officer" `
+                    --assignee $currentUserObjectId `
+                    --scope $keyVaultId 2>&1
+                
+                if ($LASTEXITCODE -eq 0) {
+                    Write-Host "RBAC role 'Key Vault Secrets Officer' assigned successfully." -ForegroundColor Green
+                } else {
+                    # Check if role assignment already exists
+                    if ($roleAssignmentResult -like "*already exists*") {
+                        Write-Host "Role assignment already exists. Continuing..." -ForegroundColor Yellow
+                    } else {
+                        Write-Host "Warning: Could not assign RBAC role. Error: $roleAssignmentResult" -ForegroundColor Yellow
+                    }
+                }
+                
+                # Also assign "Key Vault Reader" role for listing operations
+                Write-Host "Assigning 'Key Vault Reader' role for read operations..." -ForegroundColor Yellow
+                $readerRoleResult = az role assignment create `
+                    --role "Key Vault Reader" `
+                    --assignee $currentUserObjectId `
+                    --scope $keyVaultId 2>&1
+                
+                if ($LASTEXITCODE -eq 0) {
+                    Write-Host "RBAC role 'Key Vault Reader' assigned successfully." -ForegroundColor Green
+                } else {
+                    if ($readerRoleResult -like "*already exists*") {
+                        Write-Host "Reader role assignment already exists. Continuing..." -ForegroundColor Yellow
+                    }
+                }
+            } else {
+                Write-Host "Error: Could not get Key Vault resource ID." -ForegroundColor Red
+                $SkipKeyVault = $true
             }
         }
 
-        # Wait for policy propagation
-        Write-Host "Waiting for access policy propagation..." -ForegroundColor Yellow
-        Start-Sleep -Seconds 10
+        # Wait for RBAC propagation
+        Write-Host "Waiting for RBAC role propagation (this may take up to 30 seconds)..." -ForegroundColor Yellow
+        Start-Sleep -Seconds 30
 
         # 6. Store database credentials in Key Vault
         Write-Host "Storing secrets in Key Vault..." -ForegroundColor Yellow
