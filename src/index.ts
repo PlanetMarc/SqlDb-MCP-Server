@@ -247,3 +247,53 @@ main().catch((error) => {
   console.error("Server error:", error);
   process.exit(1);
 });
+
+// Add at the top of the file
+import http from "http";
+
+// Add at the end of the file
+
+const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+
+const serverHttp = http.createServer(async (req, res) => {
+  if (req.method === "POST" && req.url === "/") {
+    let body = "";
+    req.on("data", chunk => {
+      body += chunk;
+    });
+    req.on("end", async () => {
+      try {
+        const json = JSON.parse(body);
+        // Pass the request to the MCP server's handler
+        const result = await processMcpRequest(json);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(result));
+      } catch (err) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+      }
+    });
+  } else {
+    res.writeHead(404, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Not found" }));
+  }
+});
+
+serverHttp.listen(PORT, () => {
+  console.log(`MCP HTTP server listening on port ${PORT}`);
+});
+
+// Helper to process MCP requests using the registered handlers
+async function processMcpRequest(request: any) {
+  // The MCP server expects a request object with a "method" and "params"
+  // We'll use the server's internal handler registry
+  if (!request || typeof request.method !== "string") {
+    throw new Error("Invalid MCP request: missing 'method'");
+  }
+  // Find the handler for the given method
+  const handler = (server as any).handlers?.[request.method];
+  if (!handler) {
+    throw new Error(`No handler registered for method: ${request.method}`);
+  }
+  return await handler(request);
+}

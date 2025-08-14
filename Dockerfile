@@ -37,6 +37,8 @@ RUN chmod +x ./build/index.js
 RUN addgroup -g 1001 -S nodejs && \
     adduser -S nodejs -u 1001
 
+# Expose HTTP port for MCP server
+EXPOSE 3000
 USER nodejs
 
 # Run the MCP server
